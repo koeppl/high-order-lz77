@@ -37,7 +37,8 @@ set(CMAKE_CXX_FLAGS_RELEASE "-g -ggdb -Ofast -fstrict-aliasing -DNDEBUG -march=n
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-g -ggdb -Ofast -fstrict-aliasing -march=native")
 
 add_executable(ho-lz77 ho-lz77.cpp)
-add_dependencies(ho-lz77 hopscotch_map)
+add_dependencies(ho-lz77 hopscotch_map sdsl)
+target_link_libraries(ho-lz77 divsufsort sdsl)
 
 
 

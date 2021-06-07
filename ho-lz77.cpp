@@ -2,9 +2,16 @@
  * Build co-BWT (using co-lex order) of the text and compute ho-LZ77 pairs
  */
 
+#include "/scripts/code/dcheck.hpp"
 #include <dynamic.hpp>
 #include <unistd.h>
+#include <vector>
 #include <unordered_map>
+#include <divsufsort.h>
+#include "WaveletMatrix/DynamicWaveletMatrix/DynamicWaveletMatrix.hpp"
+#include <sdsl/rmq_support.hpp>
+
+
 
 using namespace dyn;
 using namespace std;
@@ -255,7 +262,7 @@ double entropy(vector<uint64_t> & V){
 
 
 
-bool empty_interval(pair<uint64_t, uint64_t> interval){
+constexpr bool empty_interval(const pair<uint64_t, uint64_t>& interval) {
 	return interval.first >= interval.second;
 }
 
@@ -455,6 +462,343 @@ inline void output_phrase(	wt_bwt & bwt,
 	index = bwt.get_terminator_position();
 
 }
+
+std::ifstream::pos_type filesize(const char* filename) {
+	std::ifstream in(filename, std::ifstream::ate | std::ifstream::binary);
+	return in.tellg(); 
+}
+
+std::string read_file(const set<char>& alphabet, const char* filePath) {
+	const size_t length = filesize(filePath);
+	std::string buffer(length+alphabet.size(), ' ');
+	size_t offset = 0;
+	for (auto rit = alphabet.rbegin(); rit != alphabet.rend(); rit++){
+		buffer[offset++] = *rit;
+	}
+	std::ifstream t(filePath);
+	t.read(&buffer[offset], length); 
+	return buffer;
+}
+
+
+inline void output_phrase_bitoptimal(wt_bwt & bwt,
+							vector<pair<int64_t, uint64_t> > & LZ77k,
+							pair<uint64_t,uint64_t> & range,
+							uint64_t & index,
+							string & phrase,
+							DynamicWaveletMatrix& dynwt,
+							std::vector<int> isa,
+							size_t text_position
+							){
+
+	//closest co-lex positions before and
+	//after wt.get_terminator_position()
+	//that are followed by the current phrase
+
+	//assign a default high value to previous/next occurrence of the phrase in co-lex order;
+	//if they are not initialized later, the high value will not be chosen since
+	//we minimize the distance with the current prefix in co-lex order
+	int64_t pred_occ = bwt.size()*2;
+	int64_t succ_occ = bwt.size()*2;
+
+	//if previous position is valid, compute it
+	if(index>0 && index-1 >= range.first && index-1 < range.second){
+
+		pred_occ = jump_back(bwt, index-1, phrase.length());
+
+	}
+
+	//if following position is valid, compute it
+	if(index >= range.first && index < range.second){
+
+		succ_occ = jump_back(bwt, index, phrase.length());
+
+	}
+
+	//at least one of the two must be initialized since there must be a previous
+	//occurrence of the phrase!
+	assert(pred_occ < bwt.size() or succ_occ < bwt.size());
+
+	//co-lex position of current prefix
+	int64_t current_prefix_pos = bwt.get_terminator_position();
+
+	//the previous occurrence cannot be the current text prefix!
+	assert(pred_occ != current_prefix_pos and succ_occ != current_prefix_pos);
+
+	//absolute distances
+	int64_t abs_dist_pred = current_prefix_pos > pred_occ ? current_prefix_pos - pred_occ : pred_occ - current_prefix_pos;
+	int64_t abs_dist_succ = current_prefix_pos > succ_occ ? current_prefix_pos - succ_occ : succ_occ - current_prefix_pos;
+
+	int64_t occ = abs_dist_pred < abs_dist_succ ? current_prefix_pos - pred_occ : current_prefix_pos - succ_occ;
+
+	//create new phrase
+	LZ77k.push_back({occ,phrase.length()});
+
+	//extend BWT with the characters in the phrase
+	for(size_t i = 0; i < phrase.length(); ++i) {
+		const char c = phrase[i];
+		bwt.extend(uint8_t(c));
+		const uint64_t inserted_index = bwt.get_terminator_position();
+		dynwt.insert(inserted_index, isa[text_position+i]);
+	}
+
+
+	//erase phrase content
+	phrase = string();
+
+	//re-initialize range to full range
+	range = bwt.get_full_interval();
+
+	//re-initialize index of current text prefix to (new) position of terminator
+	index = bwt.get_terminator_position();
+
+}
+
+/** 
+ * @brief Kasai's LCP array construction algorithm
+ * 
+ * @param text 
+ * @param sa text's suffix array, maybe a subarray of the actual suffix array
+ * @param isa sa's inverse
+ * 
+ * @return LCP-array of text wrt. sa
+ */
+template<typename vektor_type, typename string_type>
+vektor_type create_lcp(const string_type& text, const vektor_type& sa, const vektor_type& isa) {
+	vektor_type lcp(sa.size());
+	lcp[0] = 0;
+	size_t h = 0;
+	for(size_t i = 0; i < lcp.size(); ++i) {
+		if(isa[i] == 0) continue;
+		const size_t j = sa[ isa[i] -1 ];
+		while(text[i+h] == text[j+h]) ++h;
+		lcp[isa[i]] = h;
+		h = h > 0 ? h-1 : 0;
+	}
+	return lcp;
+}
+
+
+void run_pairs_bitoptimal(const string& filePath){
+
+	cout << "Computing the BIT-OPTIMAL parse in format (occ,len)" << endl;
+
+	wt_bwt bwt; //! Huffman-encoded BWT
+	set<char> alphabet;
+
+	{
+		ifstream in(filePath);
+		auto F = get_frequencies(in);
+
+		for(auto f : F) if(f.second>0) alphabet.insert(f.first);
+
+		bwt = wt_bwt(F); 
+	}
+	const std::string text = read_file(alphabet, filePath.c_str());
+	std::vector<int> sa(text.length(), 0);
+
+	divsufsort(reinterpret_cast<const uint8_t*>(text.c_str()), sa.data(), text.length());
+
+	std::vector<int> isa ( text.length(), 0 );
+	for(size_t i = 0; i < text.length(); ++i) {
+		isa[sa[i]] = i;
+	}
+	auto lcp = create_lcp(text, sa, isa);
+
+	std::vector<int> psvlcp( text.length(), 0 );
+	for(size_t i = 1; i < text.length(); ++i) {
+	    size_t j=i-1;
+	    while(lcp[j] > lcp[i] && j > 0) {
+		j = psvlcp[j];
+	    }
+	    psvlcp[i] = j;
+	}
+
+	sdsl::rmq_succinct_sct<true> rmqlcp(&lcp);
+
+	//! maps from ISA^R[i] to ISA[i], where i is a text position
+	//! ISA^R[i] are changing values, but ISA[.] is fix
+	DynamicWaveletMatrix dynwt(text.length());
+	// dynwt.insert(0, 0); //! the $ of ISA^R[i] maps to ISA[text.length()] = 0
+
+	// prepend the alphabet to the text
+	{
+	    size_t i = 0;
+	    auto rit = alphabet.rbegin();
+	    while(rit != alphabet.rend()) {
+		const uint64_t index = bwt.get_terminator_position();
+		dynwt.insert(index, isa[i]);
+		bwt.extend(uint8_t(*rit));
+		++i; ++rit;
+	    }
+	}
+
+	// process the text
+
+	vector<pair<int64_t, uint64_t> > LZ77k;//! the parse
+
+	for(size_t cur_text_position = alphabet.size(); cur_text_position < text.length(); ++cur_text_position) {
+		const size_t cur_sa_idx = isa[cur_text_position]; //! where in SA is cur_text_position?
+		const size_t cur_rsa_idx = bwt.get_terminator_position();
+		const size_t pred_sa_idx = dynwt.prevValue(0, dynwt.size,0, cur_sa_idx); // search for the predecessor in dynwt of cur_sa_idx
+		const size_t succ_sa_idx = dynwt.nextValue(0, dynwt.size,cur_sa_idx+1, text.length());
+		printf("text {pos : %lu, sa_idx: %lu, char : %c}\n", cur_text_position, cur_sa_idx, text[cur_text_position]);
+		if(pred_sa_idx != NOTFOUND) {
+		    const size_t pred_lcp_idx = rmqlcp(pred_sa_idx+1, cur_sa_idx);
+		    const size_t pred_rsa_idx = dynwt.select(pred_sa_idx, 1);
+		    printf("pred {textpos : %d, saidx: %lu, lcp: %d, rsaidx: %lu, dist: %lld}\n", sa[pred_sa_idx], pred_sa_idx, lcp[pred_lcp_idx], pred_rsa_idx, std::abs<long long>(pred_rsa_idx - cur_rsa_idx) );
+		    size_t pred_sa_idx_lcppsv = psvlcp[pred_sa_idx];
+		    // while((pred_sa_idx_lcppsv = psvlcp[pred_sa_idx_lcppsv]) > pred_lcp_idx) {}
+		    size_t pred2_sa_idx = dynwt.prevValue(0, dynwt.size,0, pred_sa_idx_lcppsv); // search for the predecessor in dynwt of cur_sa_idx
+		    if(pred2_sa_idx != NOTFOUND) {
+			const size_t pred2_lcp_idx = rmqlcp(pred2_sa_idx+1, cur_sa_idx);
+			const size_t pred2_rsa_idx = dynwt.select(pred2_sa_idx, 1);
+			printf("pred2 {textpos : %d, saidx: %lu, lcp: %d, rsaidx: %lu, dist: %lld}\n", sa[pred2_sa_idx], pred2_sa_idx, lcp[pred2_lcp_idx], pred2_rsa_idx, std::abs<long long>(pred2_rsa_idx - cur_rsa_idx) );
+		    }
+		}
+		if(succ_sa_idx != NOTFOUND) {
+		    size_t succ_lcp_idx = rmqlcp(cur_sa_idx, succ_sa_idx);
+		    printf("succ {textpos : %d, saidx: %lu, lcp: %d}\n", sa[succ_sa_idx], succ_sa_idx, lcp[succ_lcp_idx]);
+		}
+
+		// auto range = bwt.get_full_interval();//! interval of current phrase
+		// uint64_t index = bwt.get_terminator_position();//! co-lex position where current phrase should be if inserted
+		// string phrase; //! current phrase
+
+		// for(size_t backward_text_position = cur_text_position; backward_text_position >= 0; --backward_text_position) {
+		//     auto prev_range = range; //! copy of range in case in gets empty
+		//     range = bwt.LF(range, uint8_t(text[backward_text_position]));
+		//     if(empty_interval(range)) {
+		// 	range = std::move(prev_range);
+		// 	output_phrase_bitoptimal(bwt,LZ77k,range,index,phrase,dynwt,isa, cur_text_position);
+		//     }
+		//     else {
+		// 	index = bwt.LF(index,uint8_t(c));
+		//     }
+		// }
+	}
+
+		// uint64_t read_char = 0;
+		// if(in.is_open()) {
+        //
+		// 	if(in.good()) {
+		// 		in.get(c);//get character
+		// 	}
+        //
+		// 	while(in.good()) {
+        //
+		// 		prev_range = range;
+		// 		range = bwt.LF(range, uint8_t(c));
+        //
+		// 		if(empty_interval(range)){//end of phrase
+        //
+		// 			range = prev_range;
+		// 			output_phrase_bitoptimal(bwt,LZ77k,range,index,phrase,dynwt,isa,read_char);
+        //
+		// 		}else{
+        //
+		// 			index = bwt.LF(index,uint8_t(c));
+		// 			phrase += c;
+		// 			in.get(c);//get next character
+		// 			read_char++;
+        //
+		// 			if(read_char%100000 == 0){
+        //
+		// 				cout << "read " << (read_char+1) << " characters." << endl;
+        //
+		// 			}
+        //
+		// 		}
+        //
+		// 	}
+        //
+		// }
+        //
+	// 	//last phrase has not been output
+	// 	if(phrase.length()>0){
+    //
+	// 		prev_range = range;
+	// 		output_phrase_bitoptimal(bwt,LZ77k,range,index,phrase,dynwt,isa,read_char);
+    //
+	// 	}
+    //
+	// 	if(!in.eof() && in.fail())
+	// 		cout << "Error reading " << filePath << endl;
+    //
+	// }
+
+
+	// cout << "factorization: " << endl;
+	// for(auto p : LZ77k){
+        //
+	// 	auto d = 1+delta(p.first<0?-p.first:p.first);
+	// 	auto l = delta(p.second);
+	// 	cout << "off = " << p.first << " (" << d  << "  bits), len = " << p.second << " (" << l << " bits). Tot: " << (double(d+l)/double(p.second)) << " bit/symbol)" << endl;
+        //
+	// }
+        //
+	// auto N = bwt.size() -1;//file length
+        //
+        //
+	// uint64_t positive = 0;//positive offsets
+        //
+	// for(auto p : LZ77k){
+        //
+	// 	positive += p.first>0;
+        //
+	// }
+        //
+	// cout << "positive offsets: " << positive << endl;
+	// cout << "negative offsets: " << LZ77k.size()-positive << endl;
+        //
+	// int bucket_size = 1;
+        //
+	// /*auto buckets = vector<uint64_t>(bwt.size()/bucket_size + 1);
+        //
+	// for(auto p : LZ77k){
+        //
+	// 	buckets[(p.first<0?-p.first:p.first)/bucket_size]++;
+        //
+	// }
+        //
+	// for(int i=0;i<1000;++i){
+        //
+	// 	//cout << "[" << i*bucket_size << "," << (i+1)*bucket_size << ") : " << buckets[i] << endl;
+	// 	cout << i << "\t" << buckets[i] << endl;
+        //
+	// }*/
+	// vector<uint64_t> abs_off;
+	// for(auto x : LZ77k) abs_off.push_back(x.first<0?-x.first:x.first);
+        //
+	// vector<uint64_t> Len;
+	// for(auto x : LZ77k) Len.push_back(x.second);
+        //
+	// uint64_t sum_log = 0;
+        //
+	// for(auto x:abs_off) sum_log += bit_size(x)+1;
+        //
+	// auto G = alphabet.size()*8 + compute_gamma_bit_complexity(LZ77k);
+	// auto D = alphabet.size()*8 + compute_delta_bit_complexity(LZ77k);
+	// auto SU = alphabet.size()*8 + compute_succinct_bit_complexity(LZ77k);
+	// auto EO = (entropy(abs_off)+1);
+	// auto EL = entropy(Len);
+	// auto low_bound = (EO+EL)*LZ77k.size();
+        //
+	// cout << "number of phrases = " << LZ77k.size() << endl<<endl;
+        //
+	// cout << "Entropy of the offsets: " << EO << endl;
+	// cout << "Entropy of the lengths: " << EL << endl;
+	// cout << "Lower bound for encoding the pairs: " << low_bound << " bits (" << low_bound/double(N) << " bit/char, " << low_bound/8 + 1 << " Bytes)" << endl << endl;
+        //
+	// cout << "Sum of logs of the offsets: " << sum_log << endl;
+	// cout << "Average of logs of the offsets: " << double(sum_log)/double(LZ77k.size()) << endl<<endl;
+        //
+	// cout << "gamma complexity of the output: " << G/8+1 << " Bytes, " << double(G)/double(N) << " bit/symbol" << endl;
+	// cout << "delta complexity of the output: " << D/8+1 << " Bytes, " << double(D)/double(N) << " bit/symbol" << endl;
+	// cout << "Succinct complexity of the output: " << SU/8+1 << " Bytes, " << double(SU)/double(N) << " bit/symbol" << endl;
+
+}
+
 
 void run_pairs(string filePath){
 
@@ -1029,7 +1373,8 @@ int main(int argc,char** argv){
 
 	}else{
 
-		run_pairs(filePath);
+		run_pairs_bitoptimal(filePath);
+	//	run_pairs(filePath);
 
 	}
 
