@@ -633,50 +633,129 @@ void run_pairs_bitoptimal(const string& filePath){
 	    }
 	}
 
+    struct Factor {
+	size_t m_len = 0;
+	size_t m_rsa_idx = 0;
+	size_t m_sa_idx = 0;
+    };
+
+
 	// process the text
 
-	vector<pair<int64_t, uint64_t> > LZ77k;//! the parse
+	vector<vector<Factor>> factor_dag;//! factors[1..n] stores in each entry a list of candidate factors, each entry corresponds to a text position
+	factor_dag.resize(text.size() - alphabet.size());
+
+	vector<size_t> text_rsa_idx(text.size() - alphabet.size()); //! stores for each text position i its SA index of T[1..i]^R
+
+	auto get_candidate =  [&] (const size_t begin_pos, const size_t end_pos, const size_t cur_sa_idx) -> Factor {
+		const auto pred_sa_idx = dynwt.prevValue(begin_pos, end_pos, 0, cur_sa_idx); // search for the predecessor in dynwt of cur_sa_idx
+		const auto succ_sa_idx = dynwt.nextValue(begin_pos, end_pos, cur_sa_idx+1, text.length());
+
+		const size_t pred_lcp_idx = pred_sa_idx == NOTFOUND ? 0 : rmqlcp(pred_sa_idx+1, cur_sa_idx);
+		const size_t succ_lcp_idx = succ_sa_idx == NOTFOUND ? 0 : rmqlcp(cur_sa_idx+1, succ_sa_idx);
+		if(lcp[pred_lcp_idx] == 0 && lcp[succ_lcp_idx] == 0) return {};
+
+		const size_t best_sa_idx = lcp[pred_lcp_idx] < lcp[succ_lcp_idx] ? succ_sa_idx : pred_sa_idx;
+		const size_t best_lcp = std::max(lcp[pred_lcp_idx], lcp[succ_lcp_idx]);
+		const size_t best_rsa_idx = dynwt.select(best_sa_idx, 1);
+		// printf("best {textpos : %d, saidx: %lu, lcp: %lu, rsaidx: %lu}\n", sa[best_sa_idx], best_sa_idx, best_lcp, best_rsa_idx );
+		return { best_lcp, best_rsa_idx, best_sa_idx };
+	};
+
 
 	for(size_t cur_text_position = alphabet.size(); cur_text_position < text.length(); ++cur_text_position) {
-		const size_t cur_sa_idx = isa[cur_text_position]; //! where in SA is cur_text_position?
-		const size_t cur_rsa_idx = bwt.get_terminator_position();
-		const size_t pred_sa_idx = dynwt.prevValue(0, dynwt.size,0, cur_sa_idx); // search for the predecessor in dynwt of cur_sa_idx
-		const size_t succ_sa_idx = dynwt.nextValue(0, dynwt.size,cur_sa_idx+1, text.length());
-		printf("text {pos : %lu, sa_idx: %lu, char : %c}\n", cur_text_position, cur_sa_idx, text[cur_text_position]);
-		if(pred_sa_idx != NOTFOUND) {
-		    const size_t pred_lcp_idx = rmqlcp(pred_sa_idx+1, cur_sa_idx);
-		    const size_t pred_rsa_idx = dynwt.select(pred_sa_idx, 1);
-		    printf("pred {textpos : %d, saidx: %lu, lcp: %d, rsaidx: %lu, dist: %lld}\n", sa[pred_sa_idx], pred_sa_idx, lcp[pred_lcp_idx], pred_rsa_idx, std::abs<long long>(pred_rsa_idx - cur_rsa_idx) );
-		    size_t pred_sa_idx_lcppsv = psvlcp[pred_sa_idx];
-		    // while((pred_sa_idx_lcppsv = psvlcp[pred_sa_idx_lcppsv]) > pred_lcp_idx) {}
-		    size_t pred2_sa_idx = dynwt.prevValue(0, dynwt.size,0, pred_sa_idx_lcppsv); // search for the predecessor in dynwt of cur_sa_idx
-		    if(pred2_sa_idx != NOTFOUND) {
-			const size_t pred2_lcp_idx = rmqlcp(pred2_sa_idx+1, cur_sa_idx);
-			const size_t pred2_rsa_idx = dynwt.select(pred2_sa_idx, 1);
-			printf("pred2 {textpos : %d, saidx: %lu, lcp: %d, rsaidx: %lu, dist: %lld}\n", sa[pred2_sa_idx], pred2_sa_idx, lcp[pred2_lcp_idx], pred2_rsa_idx, std::abs<long long>(pred2_rsa_idx - cur_rsa_idx) );
+	    DCHECK_LT(cur_text_position - alphabet.size(), factor_dag.size());
+	    auto& factorlist = factor_dag[cur_text_position - alphabet.size()];
+	    const uint64_t cur_rsa_idx = bwt.get_terminator_position(); //! BWT position where we will insert the current read character
+	    text_rsa_idx[cur_text_position - alphabet.size()] = cur_rsa_idx;
+
+	    const size_t cur_sa_idx = isa[cur_text_position]; //! where in SA is cur_text_position?
+	    // printf("text {pos : %lu, sa_idx: %lu, rsa_idx: %lu, char : %c}\n", cur_text_position, cur_sa_idx, cur_rsa_idx, text[cur_text_position]);
+
+	    // printf("Left\n");
+	    {//leftwards in SA(T^R)
+		const Factor longest_left_factor = get_candidate(0, cur_rsa_idx, cur_sa_idx);
+		if(longest_left_factor.m_len > 0) {
+		    factorlist.push_back(longest_left_factor);
+		    size_t max_lcp = 0; //! now only store if we make a progress in lcp since we go further away from cur_rsa_idx meaning storing the distance gets more costly
+		    for(size_t left_window_size = 1, old_window_size = 0; left_window_size < cur_rsa_idx - longest_left_factor.m_rsa_idx; left_window_size*=2) {
+			if(cur_rsa_idx <= left_window_size) { break; }
+			auto ret = get_candidate(cur_rsa_idx-left_window_size, cur_rsa_idx-old_window_size, cur_sa_idx);
+			if(ret.m_len > max_lcp) {
+			    factorlist.emplace_back(ret);
+			    max_lcp = ret.m_len;
+			}
+			old_window_size = left_window_size;
 		    }
 		}
-		if(succ_sa_idx != NOTFOUND) {
-		    size_t succ_lcp_idx = rmqlcp(cur_sa_idx, succ_sa_idx);
-		    printf("succ {textpos : %d, saidx: %lu, lcp: %d}\n", sa[succ_sa_idx], succ_sa_idx, lcp[succ_lcp_idx]);
+	    }
+
+	    // printf("Right\n");
+	    {//rightwards in SA(T^R)
+		const auto longest_right_factor = get_candidate(cur_rsa_idx, dynwt.size, cur_sa_idx);
+		if(longest_right_factor.m_len > 0) {
+		    factorlist.push_back(longest_right_factor);
+		    size_t max_lcp = 0; //! now only store if we make a progress in lcp since we go further away from cur_rsa_idx meaning storing the distance gets more costly
+		    for(size_t right_window_size = 1, old_window_size = 0; right_window_size < longest_right_factor.m_rsa_idx - cur_rsa_idx; right_window_size*=2) {
+			if(cur_rsa_idx+right_window_size >= dynwt.size) { break; }
+			auto ret = get_candidate(cur_rsa_idx+old_window_size, cur_rsa_idx+right_window_size, cur_sa_idx);
+			if(ret.m_len > max_lcp) {
+			    factorlist.emplace_back(ret);
+			    max_lcp = ret.m_len;
+			}
+			old_window_size = right_window_size;
+		    }
 		}
+	    }
+	    DCHECK_GT(factorlist.size(), 0); //! must have at least one factor stored per entry
+	    if(cur_text_position % 10000 == 0) {
+		printf("#List[%lu/%lu] = %lu \n", cur_text_position, text.size(), factorlist.size());
+		printf("%lu\n", factorlist.front().m_len);
+	    }
 
-		// auto range = bwt.get_full_interval();//! interval of current phrase
-		// uint64_t index = bwt.get_terminator_position();//! co-lex position where current phrase should be if inserted
-		// string phrase; //! current phrase
-
-		// for(size_t backward_text_position = cur_text_position; backward_text_position >= 0; --backward_text_position) {
-		//     auto prev_range = range; //! copy of range in case in gets empty
-		//     range = bwt.LF(range, uint8_t(text[backward_text_position]));
-		//     if(empty_interval(range)) {
-		// 	range = std::move(prev_range);
-		// 	output_phrase_bitoptimal(bwt,LZ77k,range,index,phrase,dynwt,isa, cur_text_position);
-		//     }
-		//     else {
-		// 	index = bwt.LF(index,uint8_t(c));
-		//     }
-		// }
+	    //! prepare for the next text position
+	    dynwt.insert(cur_rsa_idx, isa[cur_text_position]); //! fill in our character such that `cur_rsa_idx` is our target position in RSA space
+	    bwt.extend(uint8_t(text[cur_text_position]));
 	}
+
+
+	auto get_offset = [&] (const size_t dag_index, const size_t factor_index) 
+	{ 
+	    return static_cast<int64_t>(text_rsa_idx[dag_index]) - 
+		    static_cast<int64_t>(factor_dag[dag_index][factor_index].m_rsa_idx); 
+		   //! gives the offset of a factor
+	};
+
+	auto get_gamma_cost = [&] (const size_t dag_index, const size_t factor_index) 
+	{ 
+	    return 
+		gamma((uint64_t)std::abs(get_offset(dag_index, factor_index)))
+		+1 // for the sign bit of the offset
+		+gamma(factor_dag[dag_index][factor_index].m_len);
+	};
+
+
+	{//greedy factorization
+	    size_t count = 0;
+	    size_t costs = 0;
+	    for(size_t pos = 0; pos < factor_dag.size(); ) {
+		auto& factorlist = factor_dag[pos];
+		DCHECK(!factorlist.empty());
+		std::sort(factorlist.begin(), factorlist.end(), [&] (const Factor& a, const Factor& b) { if(a.m_len == b.m_len) return a.m_rsa_idx < b.m_rsa_idx; return a.m_len < b.m_len; });
+		costs += get_gamma_cost(pos, factorlist.size()-1);
+		++count;
+		pos += factorlist.back().m_len;
+	    }
+	    cout << "greedy factorization: # = " << count << " gamma = " << costs << endl;
+	}
+
+	// std::priority_queue<size_t, size_t> queue;
+	// queue.push_back(0);
+	// while(!queue.empty()) {
+	//     queue.pop();
+	// }
+
+
 
 		// uint64_t read_char = 0;
 		// if(in.is_open()) {

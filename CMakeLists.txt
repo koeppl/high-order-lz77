@@ -30,7 +30,7 @@ include_directories(${INSTALL_DIR}/src/hopscotch_map/include)
 
 message("Building in ${CMAKE_BUILD_TYPE} mode")
 
-set(CMAKE_CXX_FLAGS "--std=c++11")
+set(CMAKE_CXX_FLAGS "--std=c++17 -Wall -Wextra")
 
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -ggdb -g")
 set(CMAKE_CXX_FLAGS_RELEASE "-g -ggdb -Ofast -fstrict-aliasing -DNDEBUG -march=native")
