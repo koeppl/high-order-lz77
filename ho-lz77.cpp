@@ -10,6 +10,7 @@
 #include <divsufsort.h>
 #include "WaveletMatrix/DynamicWaveletMatrix/DynamicWaveletMatrix.hpp"
 #include <sdsl/rmq_support.hpp>
+#include "vector.hpp"
 
 
 
@@ -40,7 +41,8 @@ uint64_t bit_size(uint64_t x){
  * compute the bit-size of the gamma encoding of x
  */
 uint64_t gamma(uint64_t x){
-
+    // std::cout << "computing gamma for x = " << x << " -> " <<  (2*bit_size(x) - 1) << std::endl;
+    DCHECK_GT(x,0);
 	return 2*bit_size(x) - 1;
 
 }
@@ -59,7 +61,7 @@ uint64_t delta(uint64_t x){
 /*
  * compute how many bits would the parse take in practice
  */
-uint64_t compute_gamma_bit_complexity(vector<pair<int64_t,uint64_t> > & parse){
+uint64_t compute_gamma_bit_complexity(Vector<pair<int64_t,uint64_t> > & parse){
 
 	uint64_t x = 0;
 
@@ -79,7 +81,7 @@ uint64_t compute_gamma_bit_complexity(vector<pair<int64_t,uint64_t> > & parse){
 
 }
 
-uint64_t compute_delta_bit_complexity(vector<pair<int64_t,uint64_t> > & parse){
+uint64_t compute_delta_bit_complexity(Vector<pair<int64_t,uint64_t> > & parse){
 
 	uint64_t x = 0;
 
@@ -101,7 +103,7 @@ uint64_t compute_delta_bit_complexity(vector<pair<int64_t,uint64_t> > & parse){
 
 
 
-uint64_t compute_succinct_bit_complexity(vector<pair<int64_t,uint64_t> > & parse){
+uint64_t compute_succinct_bit_complexity(Vector<pair<int64_t,uint64_t> > & parse){
 
 	uint64_t x = 0;
 	double sum_off = 0;
@@ -123,14 +125,14 @@ uint64_t compute_succinct_bit_complexity(vector<pair<int64_t,uint64_t> > & parse
 
 }
 
-uint64_t compute_Huff_bit_complexity(vector<pair<int64_t,uint64_t> > & pairs, vector<char> trails){
+uint64_t compute_Huff_bit_complexity(Vector<pair<int64_t,uint64_t> > & pairs, Vector<char> trails){
 
 	uint64_t max_encoded_off = 3200000;//max offset that we encode with Huffman. The others use delta(0).delta(offset) (0 receives the longest code)
 	uint64_t max_encoded_len = 100000;//max phrase length that we encode with Huffman. The others use delta(0).delta(len) (0 receives the longest code)
 
-	vector<uint64_t> off_freq(max_encoded_off+1);
-	vector<uint64_t> len_freq(max_encoded_len+1);
-	vector<uint64_t> char_freq(256);
+	Vector<uint64_t> off_freq(max_encoded_off+1);
+	Vector<uint64_t> len_freq(max_encoded_len+1);
+	Vector<uint64_t> char_freq(256);
 
 	uint64_t z = pairs.size();
 
@@ -153,9 +155,9 @@ uint64_t compute_Huff_bit_complexity(vector<pair<int64_t,uint64_t> > & pairs, ve
 	for(auto x : len_freq) len_sum += x;
 	for(auto x : char_freq) char_sum += x;
 
-	vector<pair<uint64_t,double> > off_f(max_encoded_off+1);
-	vector<pair<uint64_t,double> > len_f(max_encoded_len+1);
-	vector<pair<uint64_t,double> > char_f(256);
+	Vector<pair<uint64_t,double> > off_f(max_encoded_off+1);
+	Vector<pair<uint64_t,double> > len_f(max_encoded_len+1);
+	Vector<pair<uint64_t,double> > char_f(256);
 
 	bool p50=false;
 	bool p75=false;
@@ -238,7 +240,7 @@ uint64_t compute_Huff_bit_complexity(vector<pair<int64_t,uint64_t> > & pairs, ve
 /*
  * entropy of a vector
  */
-double entropy(vector<uint64_t> & V){
+double entropy(Vector<uint64_t> & V){
 
 	unordered_map<uint64_t, double> freq;
 	double n = V.size();
@@ -326,7 +328,7 @@ inline int64_t get_off(	wt_bwt & bwt,
 }
 
 inline void output_phrase(	wt_bwt & bwt,
-							vector<pair<int64_t, uint64_t> > & LZ77k,
+							Vector<pair<int64_t, uint64_t> > & LZ77k,
 							pair<uint64_t,uint64_t> & prev_range,
 							pair<uint64_t,uint64_t> & range,
 							uint64_t & index,
@@ -393,8 +395,8 @@ inline void output_phrase(	wt_bwt & bwt,
 }
 
 inline void output_phrase(	wt_bwt & bwt,
-							vector<pair<int64_t, uint64_t> > & LZ77k,
-							vector<char> & trail_chars,
+							Vector<pair<int64_t, uint64_t> > & LZ77k,
+							Vector<char> & trail_chars,
 							pair<uint64_t,uint64_t> & prev_range,
 							pair<uint64_t,uint64_t> & range,
 							uint64_t & index,
@@ -482,12 +484,12 @@ std::string read_file(const set<char>& alphabet, const char* filePath) {
 
 
 inline void output_phrase_bitoptimal(wt_bwt & bwt,
-							vector<pair<int64_t, uint64_t> > & LZ77k,
+							Vector<pair<int64_t, uint64_t> > & LZ77k,
 							pair<uint64_t,uint64_t> & range,
 							uint64_t & index,
 							string & phrase,
 							DynamicWaveletMatrix& dynwt,
-							std::vector<int> isa,
+							Vector<int> isa,
 							size_t text_position
 							){
 
@@ -578,10 +580,112 @@ vektor_type create_lcp(const string_type& text, const vektor_type& sa, const vek
 	return lcp;
 }
 
+void run_lz77(const string& filePath){
+	cout << "Computing plain overlapping LZ77" << endl;
+	wt_bwt bwt; //! Huffman-encoded BWT
+	set<char> alphabet;
+
+	{
+		ifstream in(filePath);
+		auto F = get_frequencies(in);
+
+		for(auto f : F) if(f.second>0) alphabet.insert(f.first);
+
+		bwt = wt_bwt(F); 
+	}
+	const std::string text = read_file(alphabet, filePath.c_str());
+	Vector<int> sa(text.length(), 0);
+
+	divsufsort(reinterpret_cast<const uint8_t*>(text.c_str()), sa.data(), text.length());
+
+	Vector<int> isa ( text.length(), 0 );
+	for(size_t i = 0; i < text.length(); ++i) {
+	    isa[sa[i]] = i;
+	}
+	auto lcp = create_lcp(text, sa, isa);
+
+	constexpr size_t UNDEF = -1;
+
+	Vector<size_t> psvsa( text.length(), UNDEF );
+	for(size_t i = 1; i < text.length(); ++i) {
+	    size_t j=i-1;
+	    while(j != UNDEF && sa[j] > sa[i]) {
+		j = psvsa[j];
+	    }
+	    psvsa[i] = j;
+	}
+	if(text.length() < 100) {
+	    std::cout << "text: " << text << std::endl;
+	}
+
+	Vector<size_t> nsvsa( text.length(), UNDEF );
+	
+	for(size_t offset = 2; offset <= text.length(); ++offset) {
+	    const size_t i = text.length() - offset;
+	    size_t j=i+1;
+	    while(j != UNDEF && sa[j] > sa[i]) {
+		j = nsvsa[j];
+	    }
+	    nsvsa[i] = j;
+	}
+	sdsl::rmq_succinct_sct<true> rmqlcp(&lcp);
+	Vector<size_t> lengths;
+	Vector<size_t> positions;
+
+	for(size_t cur_text_position = alphabet.size(); cur_text_position < text.length();) {
+	    const size_t cur_sa_idx = isa[cur_text_position]; //! where in SA is cur_text_position?
+	    DCHECK(psvsa[cur_sa_idx] != UNDEF || nsvsa[cur_sa_idx] != UNDEF);
+
+	    if(nsvsa[cur_sa_idx] == UNDEF) {
+		const size_t prev_lcp = lcp[rmqlcp(psvsa[cur_sa_idx]+1, cur_sa_idx)];
+		const size_t prev_pos = sa[psvsa[cur_sa_idx]];
+		const size_t prev_distance = cur_text_position - prev_pos;
+		DCHECK_GT(prev_distance, 0);
+		DCHECK_LT(prev_pos, cur_text_position);
+		positions.push_back(prev_distance);
+		lengths.push_back(prev_lcp);
+	    } else if(psvsa[cur_sa_idx] == UNDEF) {
+		const size_t next_lcp = lcp[rmqlcp(cur_sa_idx+1, nsvsa[cur_sa_idx])];
+		const size_t next_pos = sa[nsvsa[cur_sa_idx]];
+		const size_t next_distance = cur_text_position - next_pos;
+		DCHECK_LT(next_pos, cur_text_position);
+		lengths.push_back(next_lcp);
+		positions.push_back(next_distance);
+		DCHECK_GT(next_distance, 0);
+	    } else {
+		const size_t prev_lcp = lcp[rmqlcp(psvsa[cur_sa_idx]+1, cur_sa_idx)];
+		const size_t prev_pos = sa[psvsa[cur_sa_idx]];
+		const size_t prev_distance = cur_text_position - prev_pos;
+
+		const size_t next_lcp = lcp[rmqlcp(cur_sa_idx+1, nsvsa[cur_sa_idx])];
+		const size_t next_pos = sa[nsvsa[cur_sa_idx]];
+		const size_t next_distance = cur_text_position - next_pos;
+
+		DCHECK_GT(prev_lcp+next_lcp, 0);
+		DCHECK_LT(static_cast<size_t>(sa[nsvsa[cur_sa_idx]]), cur_text_position);
+		lengths.push_back(std::max(prev_lcp, next_lcp));
+		positions.push_back(prev_lcp > next_lcp ? prev_distance : next_distance);
+	    }
+	    DCHECK_GT(lengths.back(), 0);
+	    DCHECK_GT(positions.back(), 0);
+	    if(text.length() < 100) {
+		std::cout << "pos: " << cur_text_position << " len: " << lengths.back() << " ref: " << positions.back() << std::endl;
+	    }
+	    cur_text_position += lengths.back();
+	}
+	{
+	    size_t costs = 0;
+	    for(size_t factor_index = 0; factor_index < positions.size(); ++factor_index) {
+		costs += gamma(positions[factor_index]) + gamma(lengths[factor_index]); 
+	    }
+	    cout << "LZ77 factorization: # = " << positions.size() << " gamma = " << costs << endl;
+	}
+}
+
 
 void run_pairs_bitoptimal(const string& filePath){
 
-	cout << "Computing the BIT-OPTIMAL parse in format (occ,len)" << endl;
+	cout << "Computing the BIT-OPTIMAL parse in format (occ,len)" << endl << endl;
 
 	wt_bwt bwt; //! Huffman-encoded BWT
 	set<char> alphabet;
@@ -595,24 +699,15 @@ void run_pairs_bitoptimal(const string& filePath){
 		bwt = wt_bwt(F); 
 	}
 	const std::string text = read_file(alphabet, filePath.c_str());
-	std::vector<int> sa(text.length(), 0);
+	Vector<int> sa(text.length(), 0);
 
 	divsufsort(reinterpret_cast<const uint8_t*>(text.c_str()), sa.data(), text.length());
 
-	std::vector<int> isa ( text.length(), 0 );
+	Vector<int> isa ( text.length(), 0 );
 	for(size_t i = 0; i < text.length(); ++i) {
 		isa[sa[i]] = i;
 	}
 	auto lcp = create_lcp(text, sa, isa);
-
-	std::vector<int> psvlcp( text.length(), 0 );
-	for(size_t i = 1; i < text.length(); ++i) {
-	    size_t j=i-1;
-	    while(lcp[j] > lcp[i] && j > 0) {
-		j = psvlcp[j];
-	    }
-	    psvlcp[i] = j;
-	}
 
 	sdsl::rmq_succinct_sct<true> rmqlcp(&lcp);
 
@@ -642,10 +737,10 @@ void run_pairs_bitoptimal(const string& filePath){
 
 	// process the text
 
-	vector<vector<Factor>> factor_dag;//! factors[1..n] stores in each entry a list of candidate factors, each entry corresponds to a text position
+	Vector<Vector<Factor>> factor_dag;//! factors[1..n] stores in each entry a list of candidate factors, each entry corresponds to a text position
 	factor_dag.resize(text.size() - alphabet.size());
 
-	vector<size_t> text_rsa_idx(text.size() - alphabet.size()); //! stores for each text position i its SA index of T[1..i]^R
+	Vector<size_t> text_rsa_idx(text.size() - alphabet.size()); //! stores for each text position i its SA index of T[1..i]^R
 
 	auto get_candidate =  [&] (const size_t begin_pos, const size_t end_pos, const size_t cur_sa_idx) -> Factor {
 		const auto pred_sa_idx = dynwt.prevValue(begin_pos, end_pos, 0, cur_sa_idx); // search for the predecessor in dynwt of cur_sa_idx
@@ -709,8 +804,8 @@ void run_pairs_bitoptimal(const string& filePath){
 	    }
 	    DCHECK_GT(factorlist.size(), 0); //! must have at least one factor stored per entry
 	    if(cur_text_position % 10000 == 0) {
-		printf("#List[%lu/%lu] = %lu \n", cur_text_position, text.size(), factorlist.size());
-		printf("%lu\n", factorlist.front().m_len);
+		printf("Completed: %f ; #List[%lu/%lu] = %lu \r", cur_text_position*100.0/text.size(), cur_text_position, text.size(), factorlist.size());
+		fflush(stdout);
 	    }
 
 	    //! prepare for the next text position
@@ -729,7 +824,7 @@ void run_pairs_bitoptimal(const string& filePath){
 	auto get_gamma_cost = [&] (const size_t dag_index, const size_t factor_index) 
 	{ 
 	    return 
-		gamma((uint64_t)std::abs(get_offset(dag_index, factor_index)))
+		gamma((uint64_t)std::abs(get_offset(dag_index, factor_index))+1) //+1 since the offset can be zero
 		+1 // for the sign bit of the offset
 		+gamma(factor_dag[dag_index][factor_index].m_len);
 	};
@@ -749,13 +844,74 @@ void run_pairs_bitoptimal(const string& filePath){
 	    cout << "greedy factorization: # = " << count << " gamma = " << costs << endl;
 	}
 
-	// std::priority_queue<size_t, size_t> queue;
-	// queue.push_back(0);
-	// while(!queue.empty()) {
-	//     queue.pop();
-	// }
+	constexpr size_t UNDEF = -1;
+	Vector<size_t> parents(factor_dag.size()+1, UNDEF); //! stores the starting position of the factor that reaches T[i]
+	Vector<size_t> parent_index(factor_dag.size()+1, UNDEF); //! stores the index of the parent factor within factor_dag
+	Vector<size_t> distances(factor_dag.size()+1, UNDEF); //! stores the costs from T[1] to T[i]
+	std::vector<bool> processed(factor_dag.size()+1, false); //! stores the costs from T[1] to T[i]
+	distances[0] = 0;
+	parents[0] = 0;
 
+	auto cmp = [&distances](size_t left, size_t right) { return distances[left] > distances[right]; }; //! smallest distance to the top. 
+	std::priority_queue<size_t, Vector<size_t>, decltype(cmp)> queue(cmp);
+	queue.push(0);
+	while(!queue.empty()) {
+	    const auto pos = queue.top();
+	    queue.pop();
+	    const auto& is_processed = processed[pos];
+	    if(is_processed == true) { continue; }
+	    if(pos == factor_dag.size()) { continue; } //! we do not process the rightmost node/last text position
+	    processed[pos] = true;
+	    const auto& factorlist = factor_dag[pos];
+	    for(size_t factor_index = 0; factor_index < factorlist.size(); ++factor_index) {
+		const auto cost = get_gamma_cost(pos, factor_index);
+		const auto target = pos + factorlist[factor_index].m_len;
+		DCHECK_LT(pos, target);
+		DCHECK_LT(target, factor_dag.size()+1);
+		if(distances[pos] + cost < distances[target]) {
+		    distances[target] = distances[pos]+cost;
+		    parents[target] = pos;
+		    parent_index[target] = factor_index;
+		    queue.push(target);
+		}
+		
+	    }
+	}
+    
+	const size_t bitoptimal_factor_count = [&]() -> size_t {
+	    size_t count = 0;
+	    for(size_t i = factor_dag.size(); i != 0;) {
+		DCHECK_NE(parents[i], UNDEF);
+		i = parents[i];
+		++count;
+	    }
+	    cout << "bitoptimal factorization: # = " << count << " gamma = " << distances.back() << endl;
+	    return count;
+	}();
+#ifndef NDEBUG
+	Vector<Factor> bitoptimal_factors;
+	bitoptimal_factors.reserve(bitoptimal_factor_count);
+	for(size_t i = factor_dag.size(); i != 0;) {
+	    DCHECK_NE(parents[i], UNDEF);
+	    bitoptimal_factors.push_back(factor_dag[parents[i]][parent_index[i]]);
+	    i = parents[i];
+	}
+	std::reverse(bitoptimal_factors.begin(), bitoptimal_factors.end());
 
+	std::string decomp_text(text.length(), 0);
+
+	size_t decomp_offset = 0;
+	for (auto rit = alphabet.rbegin(); rit != alphabet.rend(); rit++) {
+		decomp_text[decomp_offset++] = *rit;
+	}
+	for(size_t factor_index = 0; factor_index < bitoptimal_factors.size(); ++factor_index) {
+	    const auto& factor = bitoptimal_factors[factor_index];
+	    for(size_t factor_c = 0; factor_c < factor.m_len; ++factor_c) {
+		decomp_text[decomp_offset++] = decomp_text[sa[factor.m_sa_idx]+factor_c];
+	    }
+	}
+	DCHECK(decomp_text == text);
+#endif//NDEBUG
 
 		// uint64_t read_char = 0;
 		// if(in.is_open()) {
@@ -832,7 +988,7 @@ void run_pairs_bitoptimal(const string& filePath){
         //
 	// int bucket_size = 1;
         //
-	// /*auto buckets = vector<uint64_t>(bwt.size()/bucket_size + 1);
+	// /*auto buckets = Vector<uint64_t>(bwt.size()/bucket_size + 1);
         //
 	// for(auto p : LZ77k){
         //
@@ -846,10 +1002,10 @@ void run_pairs_bitoptimal(const string& filePath){
 	// 	cout << i << "\t" << buckets[i] << endl;
         //
 	// }*/
-	// vector<uint64_t> abs_off;
+	// Vector<uint64_t> abs_off;
 	// for(auto x : LZ77k) abs_off.push_back(x.first<0?-x.first:x.first);
         //
-	// vector<uint64_t> Len;
+	// Vector<uint64_t> Len;
 	// for(auto x : LZ77k) Len.push_back(x.second);
         //
 	// uint64_t sum_log = 0;
@@ -878,8 +1034,7 @@ void run_pairs_bitoptimal(const string& filePath){
 
 }
 
-
-void run_pairs(string filePath){
+void run_pairs(const string& filePath){
 
 	cout << "Computing the parse in format (occ,len)" << endl;
 
@@ -909,7 +1064,7 @@ void run_pairs(string filePath){
 
 	// process the text
 
-	vector<pair<int64_t, uint64_t> > LZ77k;// the parse
+	Vector<pair<int64_t, uint64_t> > LZ77k;// the parse
 
 	{
 		ifstream in(filePath);
@@ -994,7 +1149,7 @@ void run_pairs(string filePath){
 
 	int bucket_size = 1;
 
-	/*auto buckets = vector<uint64_t>(bwt.size()/bucket_size + 1);
+	/*auto buckets = Vector<uint64_t>(bwt.size()/bucket_size + 1);
 
 	for(auto p : LZ77k){
 
@@ -1008,10 +1163,10 @@ void run_pairs(string filePath){
 		cout << i << "\t" << buckets[i] << endl;
 
 	}*/
-	vector<uint64_t> abs_off;
+	Vector<uint64_t> abs_off;
 	for(auto x : LZ77k) abs_off.push_back(x.first<0?-x.first:x.first);
 
-	vector<uint64_t> Len;
+	Vector<uint64_t> Len;
 	for(auto x : LZ77k) Len.push_back(x.second);
 
 	uint64_t sum_log = 0;
@@ -1090,7 +1245,7 @@ void run_pairs_local(string filePath){
 
 	// process the text
 
-	vector<pair<int64_t, uint64_t> > LZ77k;// the parse
+	Vector<pair<int64_t, uint64_t> > LZ77k;// the parse
 	uint64_t pos = 0;//current position on the text
 	uint64_t k = 0;//current position inside the current phrase
 
@@ -1209,7 +1364,7 @@ void run_pairs_local(string filePath){
 
 	int bucket_size = 1;
 
-	/*auto buckets = vector<uint64_t>(bwt.size()/bucket_size + 1);
+	/*auto buckets = Vector<uint64_t>(bwt.size()/bucket_size + 1);
 
 	for(auto p : LZ77k){
 
@@ -1223,10 +1378,10 @@ void run_pairs_local(string filePath){
 		cout << i << "\t" << buckets[i] << endl;
 
 	}*/
-	vector<uint64_t> abs_off;
+	Vector<uint64_t> abs_off;
 	for(auto x : LZ77k) abs_off.push_back(x.first<0?-x.first:x.first);
 
-	vector<uint64_t> Len;
+	Vector<uint64_t> Len;
 	for(auto x : LZ77k) Len.push_back(x.second);
 
 	uint64_t sum_log = 0;
@@ -1274,8 +1429,8 @@ void run_triples(string filePath){
 	}
 
 	// the parse
-	vector<pair<int64_t, uint64_t> > LZ77k;
-	vector<char> trail_chars;
+	Vector<pair<int64_t, uint64_t> > LZ77k;
+	Vector<char> trail_chars;
 
 	{
 		ifstream in(filePath);
@@ -1358,7 +1513,7 @@ void run_triples(string filePath){
 
 	/*int bucket_size = 1;
 
-	auto buckets = vector<uint64_t>(bwt.size()/bucket_size + 1);
+	auto buckets = Vector<uint64_t>(bwt.size()/bucket_size + 1);
 
 	for(auto p : LZ77k){
 
@@ -1387,7 +1542,7 @@ void run_triples(string filePath){
 	auto D = delta_trail+compute_delta_bit_complexity(LZ77k);
 	auto H = compute_Huff_bit_complexity(LZ77k,trail_chars);
 
-	vector<uint64_t> abs_off;
+	Vector<uint64_t> abs_off;
 	for(auto x : LZ77k) abs_off.push_back(x.first<0?-x.first:x.first);
 
 	uint64_t sum_log = 0;
@@ -1408,6 +1563,9 @@ void run_triples(string filePath){
 
 
 int main(int argc,char** argv){
+    // for(uint64_t i = 0; i < 12; ++i) {
+	// std::cout << "bits of gamma(" << i << ") = " << gamma(i+1) << std::endl;
+    // }
 
 	if(argc<2) help();
 
@@ -1452,6 +1610,7 @@ int main(int argc,char** argv){
 
 	}else{
 
+	    run_lz77(filePath);
 		run_pairs_bitoptimal(filePath);
 	//	run_pairs(filePath);
 
