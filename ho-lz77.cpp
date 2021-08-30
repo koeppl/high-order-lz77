@@ -17,6 +17,30 @@
 using namespace dyn;
 using namespace std;
 
+#define MEASURE_TIME 1
+
+#ifdef MEASURE_TIME
+#include <chrono>
+struct Stopwatch {
+	std::chrono::high_resolution_clock::time_point m_val = std::chrono::high_resolution_clock::now();
+
+	void reset() {
+		m_val = std::chrono::high_resolution_clock::now();
+	}
+	double seconds() const { 
+		return std::chrono::duration<double, std::ratio<1>>(std::chrono::high_resolution_clock::now() - m_val).count();
+	}
+
+};
+#else
+struct Stopwatch {
+	constexpr static void reset() const {}
+	constexpr static double seconds() const { return 0.0; }
+};
+#endif//MEASURE_TIME
+
+
+
 void help(){
 
 	cout << "ho-lz77 [options]" << endl <<
@@ -582,6 +606,7 @@ vektor_type create_lcp(const string_type& text, const vektor_type& sa, const vek
 
 void run_lz77(const string& filePath){
 	cout << "Computing plain overlapping LZ77" << endl;
+	Stopwatch stopwatch;
 	wt_bwt bwt; //! Huffman-encoded BWT
 	set<char> alphabet;
 
@@ -678,7 +703,7 @@ void run_lz77(const string& filePath){
 	    for(size_t factor_index = 0; factor_index < positions.size(); ++factor_index) {
 		costs += gamma(positions[factor_index]) + gamma(lengths[factor_index]); 
 	    }
-	    cout << "LZ77 factorization: # = " << positions.size() << " gamma = " << costs << endl;
+	    cout << "RESULT algo=lz77 time_sec=" << stopwatch.seconds() << " factor_count=" << positions.size() << " gamma=" << costs << " file=" << filePath << endl;
 	}
 }
 
@@ -686,6 +711,7 @@ void run_lz77(const string& filePath){
 void run_pairs_bitoptimal(const string& filePath){
 
 	cout << "Computing the BIT-OPTIMAL parse in format (occ,len)" << endl << endl;
+	Stopwatch stopwatch;
 
 	wt_bwt bwt; //! Huffman-encoded BWT
 	set<char> alphabet;
@@ -812,6 +838,8 @@ void run_pairs_bitoptimal(const string& filePath){
 	    dynwt.insert(cur_rsa_idx, isa[cur_text_position]); //! fill in our character such that `cur_rsa_idx` is our target position in RSA space
 	    bwt.extend(uint8_t(text[cur_text_position]));
 	}
+	printf("\n");
+	fflush(stdout);
 
 
 	auto get_offset = [&] (const size_t dag_index, const size_t factor_index) 
@@ -821,7 +849,8 @@ void run_pairs_bitoptimal(const string& filePath){
 		   //! gives the offset of a factor
 	};
 
-	auto get_gamma_cost = [&] (const size_t dag_index, const size_t factor_index) 
+	using cost_function = std::function<size_t(const size_t, const size_t)>;
+	cost_function get_gamma_cost = [&] (const size_t dag_index, const size_t factor_index) 
 	{ 
 	    return 
 		gamma((uint64_t)std::abs(get_offset(dag_index, factor_index))+1) //+1 since the offset can be zero
@@ -829,89 +858,121 @@ void run_pairs_bitoptimal(const string& filePath){
 		+gamma(factor_dag[dag_index][factor_index].m_len);
 	};
 
+	cost_function get_delta_cost = [&] (const size_t dag_index, const size_t factor_index) 
+	{ 
+	    return 
+		delta((uint64_t)std::abs(get_offset(dag_index, factor_index))+1) //+1 since the offset can be zero
+		+1 // for the sign bit of the offset
+		+delta(factor_dag[dag_index][factor_index].m_len);
+	};
+
 
 	{//greedy factorization
 	    size_t count = 0;
-	    size_t costs = 0;
+	    size_t gamma_costs = 0;
+	    size_t delta_costs = 0;
 	    for(size_t pos = 0; pos < factor_dag.size(); ) {
 		auto& factorlist = factor_dag[pos];
 		DCHECK(!factorlist.empty());
 		std::sort(factorlist.begin(), factorlist.end(), [&] (const Factor& a, const Factor& b) { if(a.m_len == b.m_len) return a.m_rsa_idx < b.m_rsa_idx; return a.m_len < b.m_len; });
-		costs += get_gamma_cost(pos, factorlist.size()-1);
+		gamma_costs += get_gamma_cost(pos, factorlist.size()-1);
+		delta_costs += get_delta_cost(pos, factorlist.size()-1);
 		++count;
 		pos += factorlist.back().m_len;
 	    }
-	    cout << "greedy factorization: # = " << count << " gamma = " << costs << endl;
+	    cout << "RESULT algo=lzkgreedy time_sec=" << stopwatch.seconds() << " factor_count=" << count << " gamma=" << gamma_costs << " delta=" << delta_costs << " file=" << filePath << endl;
 	}
 
 	constexpr size_t UNDEF = -1;
 	Vector<size_t> parents(factor_dag.size()+1, UNDEF); //! stores the starting position of the factor that reaches T[i]
 	Vector<size_t> parent_index(factor_dag.size()+1, UNDEF); //! stores the index of the parent factor within factor_dag
 	Vector<size_t> distances(factor_dag.size()+1, UNDEF); //! stores the costs from T[1] to T[i]
-	std::vector<bool> processed(factor_dag.size()+1, false); //! stores the costs from T[1] to T[i]
-	distances[0] = 0;
-	parents[0] = 0;
 
-	auto cmp = [&distances](size_t left, size_t right) { return distances[left] > distances[right]; }; //! smallest distance to the top. 
-	std::priority_queue<size_t, Vector<size_t>, decltype(cmp)> queue(cmp);
-	queue.push(0);
-	while(!queue.empty()) {
-	    const auto pos = queue.top();
-	    queue.pop();
-	    const auto& is_processed = processed[pos];
-	    if(is_processed == true) { continue; }
-	    if(pos == factor_dag.size()) { continue; } //! we do not process the rightmost node/last text position
-	    processed[pos] = true;
-	    const auto& factorlist = factor_dag[pos];
-	    for(size_t factor_index = 0; factor_index < factorlist.size(); ++factor_index) {
-		const auto cost = get_gamma_cost(pos, factor_index);
-		const auto target = pos + factorlist[factor_index].m_len;
-		DCHECK_LT(pos, target);
-		DCHECK_LT(target, factor_dag.size()+1);
-		if(distances[pos] + cost < distances[target]) {
-		    distances[target] = distances[pos]+cost;
-		    parents[target] = pos;
-		    parent_index[target] = factor_index;
-		    queue.push(target);
+	auto run_dijstra = [&] (cost_function cost_func) {
+	    distances[0] = 0;
+	    parents[0] = 0;
+	    std::vector<bool> processed(factor_dag.size()+1, false); //! stores the costs from T[1] to T[i]
+	    auto cmp = [&distances](size_t left, size_t right) { return distances[left] > distances[right]; }; //! smallest distance to the top. 
+	    std::priority_queue<size_t, Vector<size_t>, decltype(cmp)> queue(cmp);
+	    queue.push(0);
+	    while(!queue.empty()) {
+		const auto pos = queue.top();
+		queue.pop();
+		const auto& is_processed = processed[pos]; 
+		if(is_processed == true) { continue; } 
+		if(pos == factor_dag.size()) { continue; } //! we do not process the rightmost node/last text position
+		processed[pos] = true; //! never visit the same node twice. We may do that because instead of derease key, we just push the key with the new cost onto the heap
+		const auto& factorlist = factor_dag[pos];
+		for(size_t factor_index = 0; factor_index < factorlist.size(); ++factor_index) {
+		    const auto cost = cost_func(pos, factor_index);
+		    const auto target = pos + factorlist[factor_index].m_len;
+		    DCHECK_LT(pos, target);
+		    DCHECK_LT(target, factor_dag.size()+1);
+		    if(distances[pos] + cost < distances[target]) {
+			distances[target] = distances[pos]+cost;
+			parents[target] = pos;
+			parent_index[target] = factor_index;
+			queue.push(target);
+		    }
+
 		}
-		
 	    }
-	}
+	};
+
+#ifndef NDEBUG
+	auto run_check = [&] (size_t factor_count) {
+	    Vector<Factor> bitoptimal_factors;
+	    bitoptimal_factors.reserve(factor_count);
+	    for(size_t i = factor_dag.size(); i != 0;) {
+		DCHECK_NE(parents[i], UNDEF);
+		bitoptimal_factors.push_back(factor_dag[parents[i]][parent_index[i]]);
+		i = parents[i];
+	    }
+	    std::reverse(bitoptimal_factors.begin(), bitoptimal_factors.end());
+
+	    std::string decomp_text(text.length(), 0);
+
+	    size_t decomp_offset = 0;
+	    for (auto rit = alphabet.rbegin(); rit != alphabet.rend(); rit++) {
+		    decomp_text[decomp_offset++] = *rit;
+	    }
+	    for(size_t factor_index = 0; factor_index < bitoptimal_factors.size(); ++factor_index) {
+		const auto& factor = bitoptimal_factors[factor_index];
+		for(size_t factor_c = 0; factor_c < factor.m_len; ++factor_c) {
+		    decomp_text[decomp_offset++] = decomp_text[sa[factor.m_sa_idx]+factor_c];
+		}
+	    }
+	    DCHECK(decomp_text == text);
+	};
+#endif//NDEBUG
     
-	const size_t bitoptimal_factor_count = [&]() -> size_t {
+	auto bitoptimal_factor_count = [&](const char* label) -> size_t {
 	    size_t count = 0;
 	    for(size_t i = factor_dag.size(); i != 0;) {
 		DCHECK_NE(parents[i], UNDEF);
 		i = parents[i];
 		++count;
 	    }
-	    cout << "bitoptimal factorization: # = " << count << " gamma = " << distances.back() << endl;
+	    cout << "RESULT algo=lzkbitopt time_sec=" << stopwatch.seconds() << " factor_count=" << count << " " << label << "=" << distances.back() <<  " file=" << filePath << endl;
 	    return count;
-	}();
+	};
+
+	run_dijstra(get_gamma_cost);
+	const size_t bitoptimal_gamma_factor_count = bitoptimal_factor_count("gamma");
 #ifndef NDEBUG
-	Vector<Factor> bitoptimal_factors;
-	bitoptimal_factors.reserve(bitoptimal_factor_count);
-	for(size_t i = factor_dag.size(); i != 0;) {
-	    DCHECK_NE(parents[i], UNDEF);
-	    bitoptimal_factors.push_back(factor_dag[parents[i]][parent_index[i]]);
-	    i = parents[i];
-	}
-	std::reverse(bitoptimal_factors.begin(), bitoptimal_factors.end());
-
-	std::string decomp_text(text.length(), 0);
-
-	size_t decomp_offset = 0;
-	for (auto rit = alphabet.rbegin(); rit != alphabet.rend(); rit++) {
-		decomp_text[decomp_offset++] = *rit;
-	}
-	for(size_t factor_index = 0; factor_index < bitoptimal_factors.size(); ++factor_index) {
-	    const auto& factor = bitoptimal_factors[factor_index];
-	    for(size_t factor_c = 0; factor_c < factor.m_len; ++factor_c) {
-		decomp_text[decomp_offset++] = decomp_text[sa[factor.m_sa_idx]+factor_c];
-	    }
-	}
-	DCHECK(decomp_text == text);
+	run_check(bitoptimal_gamma_factor_count);
 #endif//NDEBUG
+
+	parents      = Vector<size_t>(factor_dag.size()+1, UNDEF); //! stores the starting position of the factor that reaches T[i]
+	parent_index = Vector<size_t>(factor_dag.size()+1, UNDEF); //! stores the index of the parent factor within factor_dag
+	distances    = Vector<size_t>(factor_dag.size()+1, UNDEF); //! stores the costs from T[1] to T[i]
+	run_dijstra(get_delta_cost);
+	const size_t bitoptimal_delta_factor_count = bitoptimal_factor_count("delta");
+#ifndef NDEBUG
+	run_check(bitoptimal_delta_factor_count);
+#endif//NDEBUG
+
+
 
 		// uint64_t read_char = 0;
 		// if(in.is_open()) {
