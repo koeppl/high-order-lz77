@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Köppl"
+  given-names: "Dominik"
+  orcid: "http://orcid.org/0000-0002-8721-4444"
+- family-names: "Prezza"
+  given-names: "Nicola"
+title: "HOLZ: High-Order Entropy Encoding of Lempel-Ziv Factor Distances}"
+url: "https://github.com/koeppl/high-order-lz77"
+https://github.com/koeppl/Low-LZ78"
+preferred-citation:
+  type: conference-paper
+  authors:
+  - family-names: "Köppl"
+    given-names: "Dominik"
+    orcid: "http://orcid.org/0000-0002-8721-4444"
+  - family-names: "Navarro"
+    given-names: "Gonzalo"
+  - family-names: "Prezza"
+    given-names: "Nicola"
+  doi: 10.1109/DCC52660.2022.00016
+  journal: "Proc. DCC"
+  start: 83  # First page number
+  end: 92 # Last page number
+  title: "HOLZ: High-Order Entropy Encoding of Lempel-Ziv Factor Distances}"
+  year: 2022
