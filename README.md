@@ -16,6 +16,7 @@ mkdir build
 cd build
 cmake ..
 make
+./holz -i Makefile
 ```
 
 ## Thanks
