@@ -8,7 +8,8 @@ Computes the High-Order Entropy Encoding for
 ## build
 
 ```console
-git clone https://github.com/nicolaprezza/high-order-lz77
+git clone https://github.com/koeppl/high-order-lz77.git
+cd high-order-lz77
 git submodule init
 git submodule update
 mkdir build
