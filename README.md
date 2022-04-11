@@ -21,7 +21,7 @@ make
 
 ## Thanks
 
-We used [miltl](https://github.com/MitI-7)'s dynamic wavelet-matrix implementation for the experiments,
+We used [MitI_7](https://github.com/MitI-7)'s dynamic wavelet-matrix implementation for the experiments,
 of which we include a modified version in the folder `WaveletMatrix`
 
 ## References
