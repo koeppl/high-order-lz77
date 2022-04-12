@@ -2,7 +2,7 @@
  * Build co-BWT (using co-lex order) of the text and compute ho-LZ77 pairs
  */
 
-#include "/scripts/code/dcheck.hpp"
+#include "dcheck.hpp"
 #include <dynamic.hpp>
 #include <unistd.h>
 #include <vector>
